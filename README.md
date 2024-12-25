@@ -1,0 +1,1 @@
+Here are examples of the analysis of metagenome, metatranscriptome, and FT-ICR-MS data collected during the enrichment cultivation of organic matter from brine shrimp carcasses in salt lake environments.
