@@ -1,0 +1,791 @@
+#Code Explanation： Here is a code example demonstrating how to analyze metagenomes, metatranscriptomes, and FT-ICR-MS data.
+
+#############################################################################
+#metagenome_analysis
+#fastp_filter_reads
+fastp -i "../00.raw_data/${sample}_1.fq.gz" -o "${sample}_clean_1.fq" \
+    -I "../00.raw_data/${sample}_2.fq.gz" -O "${sample}_clean_2.fq" \
+    -q 20 -u 20 -e 20 -l 50 -5 -3 \
+    --cut_front_window_size 50 --cut_front_mean_quality 20 \
+    --cut_tail_window_size 50 --cut_tail_mean_quality 20 \
+    -w 21 
+
+#fastqc_reports
+fastqc -o 02.original_sample_QC -t 21 -f fastq \
+    "./00.raw_data/${sample}_1.fq.gz" "./01.cleandata/${sample}_clean_1.fq" \
+    "./00.raw_data/${sample}_2.fq.gz" "./01.cleandata/${sample}_clean_2.fq" 
+
+#metagenomic assembly
+spades.py -o 03.spades/${sample} \
+    --pe1-1 "./01.cleandata/${sample}_clean_1.fq" --pe1-2 "./01.cleandata/${sample}_clean_2.fq" \
+    --meta -t 8 -m 1000 -k 21,33,55,77,99
+
+#metagenomic binning
+perl /home/gaolei/script/assemble.statistic/seqs.trim.pl ../03.spades/${sample}/final.contigs.fasta ./${sample}/scaffolds_2.5k.fasta 2500
+seqkit stat -a ./${sample}/scaffolds_2.5k.fasta > ./${sample}/scaffolds_2.5k.fasta.stat
+bbmap.sh ref=../03.spades/${sample}/final.contigs.fasta in=../01.cleandata/${sample}_clean_1.fq in2=../01.cleandata/${sample}_clean_2.fq out=./${sample}/${sample}.scaffolds.bbmap.bam k=15 minid=0.97 threads=30 build=1 local=t
+samtools sort ./${sample}/${sample}.scaffolds.bbmap.bam -o ./${sample}/${sample}.scaffolds.bbmap.sorted.bam -@ 24
+jgi_summarize_bam_contig_depths --outputDepth ./${sample}/${sample}.depth.txt ./${sample}/*.sorted.bam
+metabat2 -i ./${sample}/scaffolds_2.5k.fasta -t 24 -a ./${sample}/${sample}.depth.txt -o ./${sample}/${sample}.bin -v --unbinned
+
+#checkm2_for_mags_quality
+checkm2 predict --threads 64 --input /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/01.genomes --output-directory /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/02.checkm2_out
+
+#get_high_medium_quality_MAGs
+perl /home/gaolei/script/phylogenetic_pipline/checkM/get_HQbins.checkM.pl  ./${sample}/bins ./${sample}/bins_checkM_GC.txt  80 5
+
+#gtdbtk_annotation
+gtdbtk classify_wf  --skip_ani_screen --cpu 61 --genome_dir ./${sample}/bins_80_5 --out_dir ./${sample}/gtdb_bins_80_5
+
+#gene_prediction
+perl /home/gaolei/script/Marker_gene_tree/4.gene_pre_cotton.pl ./${sample}/bins_80_5
+
+#functional_annotation
+perl /home/gaolei/script/phylogenetic_pipline/5.function_pre_e10_V1.pl -KEGG_2019 -cpu 61 ./${sample}/bins_80_5
+
+#functional_annotation_using_METABOLIC_software
+METABOLIC-G.pl -t 64 -in-gn /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/04.metabolic/01.genomes -o /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/04.metabolic/02.out
+
+#phylogenetic_analysis
+iqtree2 -s  gtdbtk.bac120.user_msa.fasta -safe -alrt 1000 -bb 1000 -nt 64
+
+#coverm_caculated_MAGs_abundance_TPM
+coverm genome --genome-fasta-directory /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/00.genomes -x fna -1 /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/02.all_clean_data/Y22_0dBSd3_clean_1.fastq -2 /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/02.all_clean_data/Y22_0dBSd3_clean_2.fastq -t 64 --min-read-aligned-length 50 --min-read-percent-identity 0.95 --min-read-aligned-percent 0.75 --proper-pairs-only -m rpkm --output-file /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/03.coverm_out/Y22_0dBSd3_MAGs_coverm_rpkm.out
+#############################################################
+
+
+
+
+######################################################
+#metatranscriptome_analysis
+#fastp_filter_reads
+nohup fastp -i ../00.raw_data/7dBSd4.R1.raw.fastq.gz -o Y23_7dBSd4_clean_R1.fq -I ../00.raw_data/7dBSd4.R2.raw.fastq.gz -O  Y23_7dBSd4_clean_R2.fq -q 20 -u 20 -e 20 -l 50 -5 -3 --cut_front_window_size 50 --cut_front_mean_quality 20 --cut_tail_window_size 50 --cut_tail_mean_quality 20 -w 20 &
+
+#fastqc_reports
+fastqc -o 02.original_sample_tran_QC -f fastq ./00.raw_data/7dBSd4.R1.raw.fastq.gz  ./01.cleandata/Y23_7dBSd4_clean_R1.fq  ./00.raw_data/7dBSd4.R2.raw.fastq.gz   ./01.cleandata/Y23_7dBSd4_clean_R2.fq
+
+#sortmerna
+sortmerna  --fastx --sam --aligned --other --paired_in  --out2 -e 5 --de_novo_otu --otu_map --workdir ./03.sortmerna_output/Y23_7dBSd4 --ref /public/salt_lake/gaolei/software/sortmerna/sortmerna-4.2.0-Linux/database/smr_v4.3_default_db.fasta --ref /public/salt_lake/gaolei/software/sortmerna/sortmerna-4.2.0-Linux/database/smr_v4.3_sensitive_db_rfam_seeds.fasta --reads  ./01.cleandata/Y23_7dBSd4_clean_R1.fq  --reads ./01.cleandata/Y23_7dBSd4_clean_R2.fq  --threads  30
+
+#mapping
+/software/hzhengsh/bbmap/bbmap.sh ref=Y23_7dBSe1.bin.79.cds in=../../01.cleandata/out/other_fwd.fq in2=../../01.cleandata/out/r_rev.fq  minid=0.95 threads=64 nodisk ambig=random rpkm=Y23_7dBSe1.bin.79.gene.95.bbmap.transcript.rpkm.tsv
+###########################################################
+
+
+
+
+
+
+
+
+
+#######################################################
+####contigs水平进行功能和物种注释以及宏转录组数据mapping
+#先做基因预测，使用下述脚本的原因是，该脚本中修改了prodigal程序的-p参数 （-p:  预测模式,single(default)/meta，本分析针对contigs所以选择meta）
+perl /public/hyrothermalS/ouyangyt/script/4.gene_pre_RP_for_contigs.pl /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/01.all_contigs
+#要把所有contigs都用prodigal做了基因预测之后将预测得到的CDS全都cat到一起，然后再用mmseqs进行去重复。
+#先要把所有contigs都用prodigal做了基因预测之后将8个样本预测得到的CDS全都cat到一起
+cp /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/01.all_contigs/*/2.gene_pre/*.cds /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/05.all_contigs_cds
+
+cat *.cds > all_contigs.cds
+
+#然后再用mmseqs进行去重复
+mmseqs easy-cluster /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/05.all_contigs_cds/all_contigs.cds clusterRes tmp --min-seq-id 0.5 -c 0.8 --cov-mode 1
+
+#用去完冗余的contigs集合做kegg功能注释和NR物种注释
+#工作目录：/public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/05.all_contigs_cds/dereplicate_all_contigs_cds
+#在做功能注释之前需要将去冗余后的文件clusterRes_rep_seq.fasta提前拷贝到工作目录：/public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/05.all_contigs_cds/dereplicate_all_contigs_cds/中。
+#提前创建clusterRes_rep_seq/2.gene_pre目录并将去冗余后的文件clusterRes_rep_seq.fasta提前拷贝到该目录中，并修改后缀名为clusterRes_rep_seq.cds
+mkdir -p clusterRes_rep_seq/2.gene_pre
+cp clusterRes_rep_seq.fasta clusterRes_rep_seq.cds
+#提前创建clusterRes_rep_seq/3.function_pre/NR和clusterRes_rep_seq/3.function_pre/KEGG_2019目录
+mkdir -p clusterRes_rep_seq/3.function_pre/NR
+mkdir -p clusterRes_rep_seq/3.function_pre/KEGG_2019
+
+perl /public/hyrothermalS/ouyangyt/script/5.0.function_annotation_OY_new_KEGG_NR.pl --NR -cpu 14 /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/05.all_contigs_cds/dereplicate_all_contigs_cds/
+
+perl /home/gaolei/script/phylogenetic_pipline/5.function_pre_e10_V1.pl -KEGG_2019 -cpu 14 /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/05.all_contigs_cds/dereplicate_all_contigs_cds/
+
+####根据基因id匹配ko和nr注释的物种/public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/05.all_contigs_cds/dereplicate_all_contigs_cds3
+#将所需的kegg注释结果和NR注释结果拷贝到上述目录中
+cp /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/05.all_contigs_cds/dereplicate_all_contigs_cds/clusterRes_rep_seq/3.function_pre/NR/clusterRes_rep_seq.nr.table.parser.rm.repeats.taxon.out ./dereplicate_all_contigs_cds3/
+#保留clusterRes_rep_seq.nr.table.parser.rm.repeats.taxon.out文件中第一列和第7列内容并另存为
+awk -F"\t" '{print $1 "\t" $14}' clusterRes_rep_seq.nr.table.parser.rm.repeats.taxon.out > clusterRes_rep_seq.nr.table.parser.rm.repeats.taxon_1_14.out
+
+cp /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/05.all_contigs_cds/dereplicate_all_contigs_cds/clusterRes_rep_seq/3.function_pre/KEGG_2019/clusterRes_rep_seq.kegg.table.parser.rm.repeats.KO.out ./dereplicate_all_contigs_cds3/
+#保留clusterRes_rep_seq.kegg.table.parser.rm.repeats.KO.out文件中第一列和第7列内容并另存为
+awk '{print $1 "\t" $7}' clusterRes_rep_seq.kegg.table.parser.rm.repeats.KO.out > clusterRes_rep_seq.kegg.table.parser.rm.repeats.KO_1_7.out
+
+#按第一列序列id合并两个上述ko和nr文件
+mkdir merge
+cp clusterRes_rep_seq.kegg.table.parser.rm.repeats.KO_1_7.out ./merge
+cp clusterRes_rep_seq.nr.table.parser.rm.repeats.taxon_1_14.out ./merge
+cd merge/
+python /ldata/lianzhh/software/script/merge_table.py *.out > merge_ko_taxon.txt
+#有些基因未注释到ko，合并后会显示0.0，删除含有0.0的行
+grep -v '0.0' merge_ko_taxon.txt > merge_ko_taxon_cleaned.txt
+
+
+#用去完冗余的contigs集合进行宏基因组TPM定量，并拆分样品
+#在/public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/05.all_contigs_cds/dereplicate_all_contigs_cds2目录下运行
+#构建索引，以bwa构建CDS序列索引进行比对
+mv clusterRes_rep_seq.fna clusterRa
+bwa index clusterRes_rep_seq.fasta
+ 
+#计算比对到clean上的reads数，例如我有21个样本
+####vi bwa_alignment.sh将下面脚本写入这个文件中
+#!/bin/bash
+# 使用BWA进行序列比对
+# 定义输入文件列表
+FILES="Y22_0dBSd3 Y22_0dBSe2 Y22_14dBSd1 Y22_14dBSe1 Y22_30dBSd2 Y22_30dBSe2 Y22_45dBSe2 Y22_60dBSe2 Y22_7dBSd1 Y22_7dBSe1 Y23_0dBSd1 Y23_14dBSd3 Y23_14dBSe4 Y23_30dBSd4 Y23_30dBSe4 Y23_45dBSd4 Y23_45dBSe4 Y23_60dBSd3 Y23_60dBSe3 Y23_7dBSd4"
+# 循环遍历每个文件，进行BWA比对
+for i in $FILES
+do
+    bwa mem -k 19 -t 24 clusterRes_rep_seq.fasta \
+    /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/02.all_clean_data/${i}_clean_1.fastq \
+    /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/02.all_clean_data/${i}_clean_2.fastq > ./${i}.sam
+done
+####
+
+#Samtools转换sam文件为bam文件，并获取每个ORF比对的read数，1.3版本前用以下代码
+####vi samtools_change_sam_to_bam_to_mapped.sh将下面脚本写入这个文件中
+#!/bin/bash
+# 定义输入文件列表
+FILES="Y22_0dBSd3 Y22_0dBSe2 Y22_14dBSd1 Y22_14dBSe1 Y22_30dBSd2 Y22_30dBSe2 Y22_45dBSe2 Y22_60dBSe2 Y22_7dBSd1 Y22_7dBSe1 Y23_0dBSd1 Y23_14dBSd3 Y23_14dBSe4 Y23_30dBSd4 Y23_30dBSe4 Y23_45dBSd4 Y23_45dBSe4 Y23_60dBSd3 Y23_60dBSe3 Y23_7dBSd4"
+# 循环处理每个文件
+for file in $FILES; do
+    # 执行samtools转换sam文件为bam文件
+    samtools view -bS "${file}.sam" > "${file}.bam"
+    # 排序bam文件
+    samtools sort "${file}.bam" > "${file}_sort.bam"
+    # 索引排序后的bam文件
+    samtools index "${file}_sort.bam"
+    #获取每个ORF比对的read数
+    samtools idxstats "${file}_sort.bam" > "${file}_${i}_mapped.txt"
+done
+####
+#获得的txt结果有四列，从左至右分别是：基因名、基因长度、mapped_read、unmapped_read
+
+#### 因为输出的文件不含表头，我们手动添加一个
+####vi add_header.sh将下面脚本写入这个文件中
+#!/bin/bash
+# 定义输入文件列表
+FILES="Y22_0dBSd3 Y22_0dBSe2 Y22_14dBSd1 Y22_14dBSe1 Y22_30dBSd2 Y22_30dBSe2 Y22_45dBSe2 Y22_60dBSe2 Y22_7dBSd1 Y22_7dBSe1 Y23_0dBSd1 Y23_14dBSd3 Y23_14dBSe4 Y23_30dBSd4 Y23_30dBSe4 Y23_45dBSd4 Y23_45dBSe4 Y23_60dBSd3 Y23_60dBSe3 Y23_7dBSd4"
+# 循环处理每个文件
+for i in $FILES; do 
+    sed -i "1 i GeneID\t\length\tmapped_read\tunmapped_read " ${i}_mapped.txt
+done
+
+#### 因为TPM计算是不需要unmapped_read的，所以只保留前面三列
+####vi keep_first_three_columns.sh将下面脚本写入这个文件中
+#!/bin/bash
+# 定义输入文件列表
+FILES="Y22_0dBSd3 Y22_0dBSe2 Y22_14dBSd1 Y22_14dBSe1 Y22_30dBSd2 Y22_30dBSe2 Y22_45dBSe2 Y22_60dBSe2 Y22_7dBSd1 Y22_7dBSe1 Y23_0dBSd1 Y23_14dBSd3 Y23_14dBSe4 Y23_30dBSd4 Y23_30dBSe4 Y23_45dBSd4 Y23_45dBSe4 Y23_60dBSd3 Y23_60dBSe3 Y23_7dBSd4"
+# 循环处理每个文件
+for i in $FILES; do 
+    cut -f 1-3 ${i}_mapped.txt > ${i}_mapped_cut.txt
+done
+
+####这时候的文件就是我们需要的了，只需根据公式来计算即可以获得TPM ，这里我贴上用R语言和python计算的代码，比较简单。
+#### python代码：
+import pandas as pd
+import argparse
+# 命令行参数解析
+parser = argparse.ArgumentParser()
+parser.add_argument('inputfile', help='Input file name')
+parser.add_argument('outputfile', help='Output file name')
+args = parser.parse_args()
+# 读取数据
+count = pd.read_table(args.inputfile, index_col=0)
+# 过滤不需要的行
+count = count[count.index != '*']
+# 计算 RPK 和 TPM
+count['RPK'] = (count['mapped_read'] * 1000) / count['length']
+total_rpk = count['RPK'].sum()
+count['TPM'] = (count['mapped_read'] * 10e6) / total_rpk
+# 选择需要的列
+result = count[['RPK', 'TPM']]
+# 保存结果
+result.to_csv(args.outputfile, index=True, sep="\t")
+
+####R的脚本：
+#读取文件
+df <- read.delim("BJS_read.txt",header = T,row.names = 1)
+#截取需要的部分
+df_cut <- df[,1:2]
+#计算RPK
+df_cut$RPK <- df_cut$mapped_read*1000/df_cut$length
+n <- nrow(df_cut)
+result <- df_cut[-n,]#文件最后一行存在一个*行，含有NULL，需要去除掉才能计算，否则结果都为NULL
+TotalRPK <- sum(result$RPK)
+result$TPM <- (result$RPK*10e6)/TotalRPK
+write.csv(result,file = "BJS_TPM.csv")
+
+####这里我们选择用R脚本进行计算：
+setwd("E:\\16.d_e_meta_22_23_pure_cul_geno\\MAGs丰度\\dereplicate_all_contigs_cds2")
+#读取文件
+df <- read.delim("Y22_0dBSd3_mapped_cut.txt",header = T,row.names = 1)
+#截取需要的部分
+df_cut <- df[,1:2]
+#计算RPK
+df_cut$RPK <- df_cut$mapped_read*1000/df_cut$length
+n <- nrow(df_cut)
+result <- df_cut[-n,]#文件最后一行存在一个*行，含有NULL，需要去除掉才能计算，否则结果都为NULL
+TotalRPK <- sum(result$RPK)
+result$TPM <- (result$RPK*10e6)/TotalRPK
+write.csv(result,file = "Y22_0dBSd3_mapped_cut_TPM.csv")
+
+#读取文件
+df <- read.delim("Y22_0dBSe2_mapped_cut.txt",header = T,row.names = 1)
+#截取需要的部分
+df_cut <- df[,1:2]
+#计算RPK
+df_cut$RPK <- df_cut$mapped_read*1000/df_cut$length
+n <- nrow(df_cut)
+result <- df_cut[-n,]#文件最后一行存在一个*行，含有NULL，需要去除掉才能计算，否则结果都为NULL
+TotalRPK <- sum(result$RPK)
+result$TPM <- (result$RPK*10e6)/TotalRPK
+write.csv(result,file = "Y22_0dBSe2_mapped_cut_TPM.csv")
+
+#读取文件
+df <- read.delim("Y22_7dBSd1_mapped_cut.txt",header = T,row.names = 1)
+#截取需要的部分
+df_cut <- df[,1:2]
+#计算RPK
+df_cut$RPK <- df_cut$mapped_read*1000/df_cut$length
+n <- nrow(df_cut)
+result <- df_cut[-n,]#文件最后一行存在一个*行，含有NULL，需要去除掉才能计算，否则结果都为NULL
+TotalRPK <- sum(result$RPK)
+result$TPM <- (result$RPK*10e6)/TotalRPK
+write.csv(result,file = "Y22_7dBSd1_mapped_cut_TPM.csv")
+
+#读取文件
+df <- read.delim("Y22_7dBSe1_mapped_cut.txt",header = T,row.names = 1)
+#截取需要的部分
+df_cut <- df[,1:2]
+#计算RPK
+df_cut$RPK <- df_cut$mapped_read*1000/df_cut$length
+n <- nrow(df_cut)
+result <- df_cut[-n,]#文件最后一行存在一个*行，含有NULL，需要去除掉才能计算，否则结果都为NULL
+TotalRPK <- sum(result$RPK)
+result$TPM <- (result$RPK*10e6)/TotalRPK
+write.csv(result,file = "Y22_7dBSe1_mapped_cut_TPM.csv")
+
+#读取文件
+df <- read.delim("Y22_14dBSd1_mapped_cut.txt",header = T,row.names = 1)
+#截取需要的部分
+df_cut <- df[,1:2]
+#计算RPK
+df_cut$RPK <- df_cut$mapped_read*1000/df_cut$length
+n <- nrow(df_cut)
+result <- df_cut[-n,]#文件最后一行存在一个*行，含有NULL，需要去除掉才能计算，否则结果都为NULL
+TotalRPK <- sum(result$RPK)
+result$TPM <- (result$RPK*10e6)/TotalRPK
+write.csv(result,file = "Y22_14dBSd1_mapped_cut_TPM.csv")
+
+#读取文件
+df <- read.delim("Y22_14dBSe1_mapped_cut.txt",header = T,row.names = 1)
+#截取需要的部分
+df_cut <- df[,1:2]
+#计算RPK
+df_cut$RPK <- df_cut$mapped_read*1000/df_cut$length
+n <- nrow(df_cut)
+result <- df_cut[-n,]#文件最后一行存在一个*行，含有NULL，需要去除掉才能计算，否则结果都为NULL
+TotalRPK <- sum(result$RPK)
+result$TPM <- (result$RPK*10e6)/TotalRPK
+write.csv(result,file = "Y22_14dBSe1_mapped_cut_TPM.csv")
+
+#读取文件
+df <- read.delim("Y22_30dBSd2_mapped_cut.txt",header = T,row.names = 1)
+#截取需要的部分
+df_cut <- df[,1:2]
+#计算RPK
+df_cut$RPK <- df_cut$mapped_read*1000/df_cut$length
+n <- nrow(df_cut)
+result <- df_cut[-n,]#文件最后一行存在一个*行，含有NULL，需要去除掉才能计算，否则结果都为NULL
+TotalRPK <- sum(result$RPK)
+result$TPM <- (result$RPK*10e6)/TotalRPK
+write.csv(result,file = "Y22_30dBSd2_mapped_cut_TPM.csv")
+
+#读取文件
+df <- read.delim("Y22_30dBSe2_mapped_cut.txt",header = T,row.names = 1)
+#截取需要的部分
+df_cut <- df[,1:2]
+#计算RPK
+df_cut$RPK <- df_cut$mapped_read*1000/df_cut$length
+n <- nrow(df_cut)
+result <- df_cut[-n,]#文件最后一行存在一个*行，含有NULL，需要去除掉才能计算，否则结果都为NULL
+TotalRPK <- sum(result$RPK)
+result$TPM <- (result$RPK*10e6)/TotalRPK
+write.csv(result,file = "Y22_30dBSe2_mapped_cut_TPM.csv")
+
+#读取文件
+df <- read.delim("Y22_45dBSe2_mapped_cut.txt",header = T,row.names = 1)
+#截取需要的部分
+df_cut <- df[,1:2]
+#计算RPK
+df_cut$RPK <- df_cut$mapped_read*1000/df_cut$length
+n <- nrow(df_cut)
+result <- df_cut[-n,]#文件最后一行存在一个*行，含有NULL，需要去除掉才能计算，否则结果都为NULL
+TotalRPK <- sum(result$RPK)
+result$TPM <- (result$RPK*10e6)/TotalRPK
+write.csv(result,file = "Y22_45dBSe2_mapped_cut_TPM.csv")
+
+#读取文件
+df <- read.delim("Y22_60dBSe2_mapped_cut.txt",header = T,row.names = 1)
+#截取需要的部分
+df_cut <- df[,1:2]
+#计算RPK
+df_cut$RPK <- df_cut$mapped_read*1000/df_cut$length
+n <- nrow(df_cut)
+result <- df_cut[-n,]#文件最后一行存在一个*行，含有NULL，需要去除掉才能计算，否则结果都为NULL
+TotalRPK <- sum(result$RPK)
+result$TPM <- (result$RPK*10e6)/TotalRPK
+write.csv(result,file = "Y22_60dBSe2_mapped_cut_TPM.csv")
+
+#读取文件
+df <- read.delim("Y23_0dBSd1_mapped_cut.txt",header = T,row.names = 1)
+#截取需要的部分
+df_cut <- df[,1:2]
+#计算RPK
+df_cut$RPK <- df_cut$mapped_read*1000/df_cut$length
+n <- nrow(df_cut)
+result <- df_cut[-n,]#文件最后一行存在一个*行，含有NULL，需要去除掉才能计算，否则结果都为NULL
+TotalRPK <- sum(result$RPK)
+result$TPM <- (result$RPK*10e6)/TotalRPK
+write.csv(result,file = "Y23_0dBSd1_mapped_cut_TPM.csv")
+
+#读取文件
+df <- read.delim("Y23_7dBSd4_mapped_cut.txt",header = T,row.names = 1)
+#截取需要的部分
+df_cut <- df[,1:2]
+#计算RPK
+df_cut$RPK <- df_cut$mapped_read*1000/df_cut$length
+n <- nrow(df_cut)
+result <- df_cut[-n,]#文件最后一行存在一个*行，含有NULL，需要去除掉才能计算，否则结果都为NULL
+TotalRPK <- sum(result$RPK)
+result$TPM <- (result$RPK*10e6)/TotalRPK
+write.csv(result,file = "Y23_7dBSd4_mapped_cut_TPM.csv")
+
+#读取文件
+df <- read.delim("Y23_14dBSd3_mapped_cut.txt",header = T,row.names = 1)
+#截取需要的部分
+df_cut <- df[,1:2]
+#计算RPK
+df_cut$RPK <- df_cut$mapped_read*1000/df_cut$length
+n <- nrow(df_cut)
+result <- df_cut[-n,]#文件最后一行存在一个*行，含有NULL，需要去除掉才能计算，否则结果都为NULL
+TotalRPK <- sum(result$RPK)
+result$TPM <- (result$RPK*10e6)/TotalRPK
+write.csv(result,file = "Y23_14dBSd3_mapped_cut_TPM.csv")
+
+#读取文件
+df <- read.delim("Y23_14dBSe4_mapped_cut.txt",header = T,row.names = 1)
+#截取需要的部分
+df_cut <- df[,1:2]
+#计算RPK
+df_cut$RPK <- df_cut$mapped_read*1000/df_cut$length
+n <- nrow(df_cut)
+result <- df_cut[-n,]#文件最后一行存在一个*行，含有NULL，需要去除掉才能计算，否则结果都为NULL
+TotalRPK <- sum(result$RPK)
+result$TPM <- (result$RPK*10e6)/TotalRPK
+write.csv(result,file = "Y23_14dBSe4_mapped_cut_TPM.csv")
+
+#读取文件
+df <- read.delim("Y23_30dBSd4_mapped_cut.txt",header = T,row.names = 1)
+#截取需要的部分
+df_cut <- df[,1:2]
+#计算RPK
+df_cut$RPK <- df_cut$mapped_read*1000/df_cut$length
+n <- nrow(df_cut)
+result <- df_cut[-n,]#文件最后一行存在一个*行，含有NULL，需要去除掉才能计算，否则结果都为NULL
+TotalRPK <- sum(result$RPK)
+result$TPM <- (result$RPK*10e6)/TotalRPK
+write.csv(result,file = "Y23_30dBSd4_mapped_cut_TPM.csv")
+
+#读取文件
+df <- read.delim("Y23_30dBSe4_mapped_cut.txt",header = T,row.names = 1)
+#截取需要的部分
+df_cut <- df[,1:2]
+#计算RPK
+df_cut$RPK <- df_cut$mapped_read*1000/df_cut$length
+n <- nrow(df_cut)
+result <- df_cut[-n,]#文件最后一行存在一个*行，含有NULL，需要去除掉才能计算，否则结果都为NULL
+TotalRPK <- sum(result$RPK)
+result$TPM <- (result$RPK*10e6)/TotalRPK
+write.csv(result,file = "Y23_30dBSe4_mapped_cut_TPM.csv")
+
+#读取文件
+df <- read.delim("Y23_45dBSd4_mapped_cut.txt",header = T,row.names = 1)
+#截取需要的部分
+df_cut <- df[,1:2]
+#计算RPK
+df_cut$RPK <- df_cut$mapped_read*1000/df_cut$length
+n <- nrow(df_cut)
+result <- df_cut[-n,]#文件最后一行存在一个*行，含有NULL，需要去除掉才能计算，否则结果都为NULL
+TotalRPK <- sum(result$RPK)
+result$TPM <- (result$RPK*10e6)/TotalRPK
+write.csv(result,file = "Y23_45dBSd4_mapped_cut_TPM.csv")
+
+#读取文件
+df <- read.delim("Y23_45dBSe4_mapped_cut.txt",header = T,row.names = 1)
+#截取需要的部分
+df_cut <- df[,1:2]
+#计算RPK
+df_cut$RPK <- df_cut$mapped_read*1000/df_cut$length
+n <- nrow(df_cut)
+result <- df_cut[-n,]#文件最后一行存在一个*行，含有NULL，需要去除掉才能计算，否则结果都为NULL
+TotalRPK <- sum(result$RPK)
+result$TPM <- (result$RPK*10e6)/TotalRPK
+write.csv(result,file = "Y23_45dBSe4_mapped_cut_TPM.csv")
+
+#读取文件
+df <- read.delim("Y23_60dBSd3_mapped_cut.txt",header = T,row.names = 1)
+#截取需要的部分
+df_cut <- df[,1:2]
+#计算RPK
+df_cut$RPK <- df_cut$mapped_read*1000/df_cut$length
+n <- nrow(df_cut)
+result <- df_cut[-n,]#文件最后一行存在一个*行，含有NULL，需要去除掉才能计算，否则结果都为NULL
+TotalRPK <- sum(result$RPK)
+result$TPM <- (result$RPK*10e6)/TotalRPK
+write.csv(result,file = "Y23_60dBSd3_mapped_cut_TPM.csv")
+
+#读取文件
+df <- read.delim("Y23_60dBSe3_mapped_cut.txt",header = T,row.names = 1)
+#截取需要的部分
+df_cut <- df[,1:2]
+#计算RPK
+df_cut$RPK <- df_cut$mapped_read*1000/df_cut$length
+n <- nrow(df_cut)
+result <- df_cut[-n,]#文件最后一行存在一个*行，含有NULL，需要去除掉才能计算，否则结果都为NULL
+TotalRPK <- sum(result$RPK)
+result$TPM <- (result$RPK*10e6)/TotalRPK
+write.csv(result,file = "Y23_60dBSe3_mapped_cut_TPM.csv")
+
+####将计算好的*_TPM.csv文件上传到服务器目录中，然后将其修改为.txt文件
+#vi change_csv_to_txt.sh将下述脚本写入文件中
+#!/bin/bash
+
+# 遍历当前目录下所有的.csv文件
+for file in *.csv; do
+    # 使用sed命令将逗号替换为制表符，并去除双引号
+    sed -e 's/,/\t/g' -e 's/"//g' "$file" > "${file%.csv}.txt"
+done
+
+echo "所有CSV文件已转换为TXT格式，并且已去除双引号。"
+####
+
+#保留*_TPM.txt文件中第一列和第5列内容并另存为
+#vi filter_column_1_5.sh将下述脚本写入文件中
+#!/bin/bash
+
+# 遍历当前目录下所有匹配*_TPM.txt的文件
+for file in *_TPM.txt; do
+    # 使用awk提取第一列和第五列，并将结果保存到新文件
+    awk -F"\t" '{print $1 "\t" $5}' "$file" > "${file%.txt}_1_5.txt"
+done
+
+echo "所有文件已处理，并且提取的列已保存到新的文件中。"
+####
+#要批量更改文件中的列名，您可以使用以下的shell脚本。这个脚本会遍历当前目录下所有以_TPM_1_5.txt结尾的文件，并使用awk命令在第一行替换第一列的名字为“id”，第二列的名字为文件名中的特定字符加上“_TPM”。
+#vi change_column_id.sh
+for file in *_TPM_1_5.txt; do
+  # 提取文件名中的前缀
+  prefix=$(echo $file | sed 's/_mapped.*//')
+  # 使用awk命令替换列名，并将输出保存到新文件中
+  awk -v prefix="$prefix" 'NR==1 {$1="id"; $2=prefix"_TPM"} 1' $file > "${file%.txt}.new.txt"
+done
+####
+
+#按第一列序列id合并*_TPM_1_5.new.txt文件
+python /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/05.all_contigs_cds/dereplicate_all_contigs_cds2/merge_table.py *_TPM_1_5.new.txt > merge_TPM.txt
+#删除第二行重复行
+sed '2d' merge_TPM.txt > merge_TPM_modified.txt
+删除第二列（空列）
+awk '{$2=""; print $0}' merge_TPM_modified.txt > merge_TPM_modified2.txt
+
+
+
+#拷贝上述合并后的merge_TPM_1_5.new.txt到以下目录
+cp  /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/05.all_contigs_cds/dereplicate_all_contigs_cds2/merge_TPM_modified2.txt /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/05.all_contigs_cds/dereplicate_all_contigs_cds3/merge
+
+#按第一列序列id合并merge_TPM_modified2.txt 和merge_ko_taxon_cleaned_phylum.txt文件
+awk 'NR==FNR{a[$1]=$0; next} $1 in a{print a[$1] "\t" $2 "\t" $3 "\t" $4}' merge_TPM_modified2.txt merge_ko_taxon_cleaned_phylum.txt > merge_ko_taxon_TPM.txt
+
+#设置制表格为分隔符
+sed -i 's/ \+/\t/g' merge_ko_taxon_TPM.txt
+
+#通过excel将上述表格整理成如下：
+
+#将上述表格按第一列相同行名合并计算sum：
+setwd("E:\\16.d_e_meta_22_23_pure_cul_geno\\MAGs丰度\\contigs_ko_taxon_TPM")
+# 导入dplyr包
+library(dplyr)
+# 导入readxl包
+library(readxl)
+# 导入openxlsx包
+library(openxlsx)
+# 读取Excel文件，指定第一行为列名，第一列为行名
+df <- read_excel("merge_ko_taxon_TPM_treatment2.xlsx")
+# 显示数据框的前几行
+head(df)
+# 对数据框根据第一列进行分组，并对每一列进行求和
+result2 <- df %>%
+  group_by(ID) %>%
+  summarize_all(.funs = sum)
+# 输出结果
+print(result2)
+# 将数据框保存为Excel文件
+write.xlsx(result2, "merge_ko_taxon_TPM_treatment2_output_file.xlsx", rowNames = FALSE)
+
+# 读取Excel文件，指定第一行为列名，第一列为行名
+df2 <- read_excel("merge_ko_taxon_TPM_experimental_days2.xlsx")
+# 显示数据框的前几行
+head(df2)
+# 对数据框根据第一列进行分组，并对每一列进行求和
+result <- df2 %>%
+  group_by(ID) %>%
+  summarize_all(.funs = sum)
+# 输出结果
+print(result)
+# 将数据框保存为Excel文件
+write.xlsx(result, "merge_ko_taxon_TPM_experimental_days2_output_file.xlsx", rowNames = FALSE)
+
+#通过上述R脚本得到如下表格，并使用excel计算TPM_sum_log
+
+
+
+#用excel整理上述表格，获得如下的示例表格
+
+#并创建如下的基因顺序表
+
+#并创建物种顺序表
+
+#用下面的R脚本，结合上述3个表，进行绘图
+setwd("E:\\16.d_e_meta_22_23_pure_cul_geno\\MAGs丰度\\contigs_ko_taxon_TPM")
+# rm(list = ls())
+library(dplyr)
+library(scatterpie)
+library(ggplot2)
+library(showtext)
+
+data=read.csv('merge_ko_taxon_TPM_experimental_days2_output_file_polysaccharide.txt',sep='\t',header = T,check.names = F)
+taxonNum=read.csv('merge_ko_taxon_TPM_experimental_days2_output_file_polysaccharide_taxon_num.txt',sep='\t',header = T)
+geneNum=read.csv('merge_ko_taxon_TPM_experimental_days2_output_file_polysaccharide_gene_num.txt',sep='\t',header = T)
+
+# 提取指定列并生成向量
+taxon <- taxonNum$phylum
+Gene <- geneNum$gene
+
+test <- ggplot(data) +  
+  geom_scatterpie(aes(x = taxon_num, y = gene_num, r = Samples_TPM_sum_log10 * 0.135),
+                  data = data, cols = c('0d_TPM','7d_TPM','14d_TPM','30d_TPM','45d_TPM','60d_TPM')) +  
+  scale_fill_manual(values = c('#5760AB', '#30B349', '#F3EB18', '#F58022', '#BC80BD', '#FDB863', '#C7EAE5', '#FFED6F')) +
+  scale_x_continuous(breaks = 1:46, labels = taxon) +
+  scale_y_continuous(breaks = 1:29, labels = Gene) + 
+  labs(x = "Taxon", y = "Gene") + 
+  coord_fixed() +
+  theme_minimal() +  
+  theme(axis.text.x = element_text(angle = 35, hjust = 1, size = 10, family = 'serif', color = "black"),  
+        axis.text.y = element_text(size = 10, family = 'serif', color = "black"),  
+        panel.background = element_rect(fill = "white", colour = "white"),  
+        panel.grid.major.y = element_line(color = "grey", linetype = "dashed", size = 0.25),  
+        panel.grid.major.x = element_line(color = "grey", linetype = "dashed", size = 0.25),  
+        panel.grid.minor = element_blank(),  
+        panel.border = element_rect(colour = "black", fill = NA, size = 1))
+
+test
+
+#为了绘制圆圈大小的图例（第一次跑需要跑一下这段，会出现Samples_TPM_sum_log10的图例）
+# test <- ggplot(data) +  
+#   geom_point(aes(x = taxon_num, y = gene_num, size = Samples_TPM_sum_log10* 0.135), shape = 21) +
+#   scale_fill_manual(values = c('#5760AB', '#30B349', '#F3EB18', '#F58022', '#BC80BD', '#FDB863', '#C7EAE5', '#FFED6F')) +
+#   scale_x_continuous(breaks = 1:46, labels = taxon) +
+#   scale_y_continuous(breaks = 1:31, labels = Gene) + 
+#   labs(x = "Taxon", y = "Gene", size = 16, family = 'serif') + 
+#   coord_fixed() +
+#   theme(axis.text.x = element_text(angle = 35, hjust = 1, size = 13, family = 'serif'),
+#         axis.text.y = element_text(size = 14, family = 'serif')) +
+#   guides(size = guide_legend(title = "Samples_TPM_sum_log10"))
+# 
+# test
+
+# 保存图形为 PDF 格式
+  ggsave("04.8subset_of_KO_NR_Pylum_#_ALLKO_NOno_KeyGene_IAA_负数变为0.001.pdf", plot = test, width = 20, height = 10, units = "in",limitsize = FALSE)
+
+#获得如下所示的图：图中左侧功能类别收到AI添加。
+
+
+
+#####contigs水平进行宏转录组mapping
+#工作目录：/public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/07.metatranscriptome_mapping/05.contigs_transcript_rpkm
+#在工作目录中创建01.cds目录，去冗余后的文件cds文件clusterRes_rep_seq.fasta提前拷贝到01.cds目录中，并修改后缀名为clusterRes_rep_seq.cds
+mkdir 01.cds
+#创建储存mapping结果的目录02.transcript_rpkm
+mkdir  02.transcript_rpkm
+
+####将下面的脚本写入这个文件中，并执行。vi 01.Y23_7dBSd4_bbmap_transcript_rpkm.sh
+#!/bin/bash
+
+# 设置输入目录和输出根目录
+input_cds_dir="/public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/07.metatranscriptome_mapping/05.contigs_transcript_rpkm/01.cds"
+output_parent_dir="/public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/07.metatranscriptome_mapping/05.contigs_transcript_rpkm/02.transcript_rpkm/"
+
+# 创建输出目录
+mkdir -p "$output_parent_dir"
+
+# 遍历每个cds文件
+for cds_file in "$input_cds_dir"/*.cds; do
+	    if [ -f "$cds_file" ]; then
+		            # 获取文件名（不含扩展名）
+			            file_name=$(basename "$cds_file" .cds)
+				            
+					            # 构建输出文件夹路径
+						            output_dir="$output_parent_dir/Y23_7dBSd4/"
+							            mkdir -p "$output_dir"
+
+								            # 构建输出文件路径
+									            output_file="$output_dir${file_name}_gene.95.bbmap.transcript.rpkm.tsv"
+
+										            # 执行bbmap.sh命令
+											            /software/hzhengsh/bbmap/bbmap.sh ref="$cds_file" \
+												                in="/public/salt_lake/gaolei/01.project/14.d_e_metatranscriptome_2023/03.sortmerna_output/Y23_7dBSd4/out/other_fwd.fq" \
+														            in2="/public/salt_lake/gaolei/01.project/14.d_e_metatranscriptome_2023/03.sortmerna_output/Y23_7dBSd4/out/other_rev.fq" \
+															                minid=0.95 threads=64 nodisk ambig=random rpkm="$output_file"
+																	    else
+																		            echo "Error: No cds file found in $input_cds_dir"
+																			            exit 1
+																				        fi
+																					done
+#以此类推，如下图
+
+#进入02.transcript_rpkm目录
+cd /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/07.metatranscriptome_mapping/05.contigs_transcript_rpkm/02.transcript_rpkm
+#将下面脚本写入rename_files.sh文件，并执行
+vi rename_files.sh
+####
+#!/bin/bash
+
+# Loop through each subdirectory
+for subdir in */; do
+    # Remove trailing slash from subdirectory name
+    subdir_name="${subdir%/}"
+    
+    # Loop through each .tsv file in the subdirectory
+    for file in "$subdir"*.tsv; do
+        # Get the filename without extension
+        base_name=$(basename "$file" .tsv)
+        
+        # Rename the file by adding the subdirectory name as a prefix
+        mv "$file" "${subdir_name}_${base_name}.tsv"
+    done
+done
+####
+
+mkdir all_contigs_rpkm
+cd all_contigs_rpkm
+
+#将上述所有重命名完后的文件拷贝一份到/public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/07.metatranscriptome_mapping/05.contigs_transcript_rpkm/02.transcript_rpkm/all_contigs_rpkm目录
+
+cp /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/07.metatranscriptome_mapping/05.contigs_transcript_rpkm/02.transcript_rpkm/*/Y*_clusterRes_rep_seq_gene.95.bbmap.transcript.rpkm.tsv ./
+
+#删除文件Y2*_clusterRes_rep_seq_gene.95.bbmap.transcript.rpkm.tsv中前5行内容
+vi remove_lines.sh
+#将下面脚本写入remove_lines.sh文件中，并运行
+####
+#!/bin/bash
+
+# Loop through each matching file
+for filename in Y2*_clusterRes_rep_seq_gene.95.bbmap.transcript.rpkm.tsv; do
+    # Remove the first 5 lines using sed
+    sed -i '1,5d' "$filename"
+    echo "Removed 5 lines from $filename"
+done
+####
+
+#保留文件Y2*_clusterRes_rep_seq_gene.95.bbmap.transcript.rpkm.tsv中第一列和第六列内容，其他列删除
+vi retain_columns.sh
+#将下面脚本写入retain_columns.sh文件中，并运行
+####
+#!/bin/bash
+
+# Loop through each matching file
+for filename in Y2*_clusterRes_rep_seq_gene.95.bbmap.transcript.rpkm.tsv; do
+    # Create a temporary file to store the modified content
+    temp_file=$(mktemp)
+    
+    # Extract the first and sixth columns using awk
+    awk '{print $1, $6}' "$filename" > "$temp_file"
+    
+    # Overwrite the original file with the modified content
+    mv "$temp_file" "$filename"
+    
+    echo "Retained first and sixth columns in $filename"
+done
+####
+
+#这里不必给每个表格添加列名！！！
+#批量在每个 Y2*_clusterRes_rep_seq_gene.95.bbmap.transcript.rpkm.tsv 文件的第一行添加列名，第一列的名字为ID，第二列的名字为Y2*_clusterRes_rep_seq_gene.95.bbmap.transcript.rpkm文件名开始的“Y2*_”+RPKM
+vi add_column_names.sh
+#将下面脚本写入add_column_names.sh文件中，并运行
+####
+#!/bin/bash
+
+# Loop through each matching file
+for filename in Y2*_clusterRes_rep_seq_gene.95.bbmap.transcript.rpkm.tsv; do
+    # Create a temporary file to store the modified content
+    temp_file=$(mktemp)
+    
+    # Extract the prefix from the filename (e.g., Y23_14dBSd3)
+    prefix=$(echo "$filename" | cut -d'_' -f1-2)
+    
+    # Add column names to the first row
+    echo -e "ID\t${prefix}_RPKM" > "$temp_file"
+    cat "$filename" >> "$temp_file"
+    
+    # Write the modified content back to the file
+    mv "$temp_file" "$filename"
+    
+    echo "已在 $filename 的第一行添加列名"
+done
+####
+
+#需要将所有表格中的空格替换为制表格分隔符
+for file in *.txt; do
+    sed -i 's/ /\t/g' "$file"
+done
+
+#按第一列序列id合并*.tsv文件
+python /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/05.all_contigs_cds/dereplicate_all_contigs_cds2/merge_table.py *.txt > merge_all_contigs_RPKM.txt
+
+cp /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/05.all_contigs_cds/dereplicate_all_contigs_cds3/merge/merge_ko_taxon_cleaned_phylum.txt ./
+
+#按第一列序列id合并merge_all_contigs_RPKM.txt 和merge_ko_taxon_cleaned_phylum.txt文件
+awk 'NR==FNR{a[$1]=$0; next} $1 in a{print a[$1] "\t" $2 "\t" $3 "\t" $4}' merge_all_contigs_RPKM.txt merge_ko_taxon_cleaned_phylum.txt > merge_all_contigs_taxon_RPKM.txt
+#后续分析绘图同上！
+##############################################################################################
+
+
+
+
+
+
+
+
+###############################################################################################
+#viruses_analysis
+##分开，单独一个样品一个样品跑
+ViWrap run --input_metagenome /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/01.all_contigs/Y22_0dBSd3_contigs.fna  --input_reads  /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/02.all_clean_data/Y22_0dBSd3_clean_1.fastq,/public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/08.MAGs_Relative_abundance/02.all_clean_data/Y22_0dBSd3_clean_2.fastq --db_dir /public/database/ViWrap_db/ --conda_env_dir /public/database/ViWrap/ViWrap_conda_environments/ --threads 64 --input_length_limit 5000 --out_dir /public/salt_lake/gaolei/01.project/16.d_e_meta_22_23_pure_cul_geno/10.ViWrap_out3/Y22_0dBSd3/
+#################################################################################################
+
+
+
+
+
+
+
+#################################################################################################
+#FT-ICR-MS_data_analysis
+metabodirect Report.csv metadata.csv -o experiment_out -g Treatments Experimental_days -t
+#################################################################################################
